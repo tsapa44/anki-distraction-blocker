@@ -16,16 +16,21 @@ DEFAULT_CONFIG_PATH = os.environ.get(
     "ANKIBLOCK_CONFIG", "/usr/local/etc/ankiblock/config.json"
 )
 
-# Seeded with common time-sinks; the user curates this to their own habits.
+# The user's curated time-sinks.
 DEFAULT_BLOCKLIST = [
-    "youtube.com",
-    "reddit.com",
-    "twitter.com",
-    "x.com",
+    "meduza.io",
+    "cybersport.ru",
+    "zerkalo.io",
     "instagram.com",
+    "x.com",
+    "twitch.tv",
+    "web.telegram.org",
+    "telegram.org",
+    "steampowered.com",
+    "linkedin.com",
+    "youtube.com",
     "tiktok.com",
     "facebook.com",
-    "news.ycombinator.com",
 ]
 
 
@@ -47,6 +52,8 @@ class Config:
 
     # State
     state_path: str = "/usr/local/var/ankiblock/state.json"
+    # World-writable inbox where the menu bar drops add/remove requests (ADR-0005).
+    requests_path: str = "/usr/local/var/ankiblock/requests"
 
     @classmethod
     def load(cls, path: str | None = None) -> "Config":
@@ -69,3 +76,16 @@ class Config:
         with open(path, "w") as f:
             json.dump(asdict(self), f, indent=2)
             f.write("\n")
+
+
+def normalize_domain(raw: str) -> str:
+    """Reduce a typed string to a bare host: drop scheme, path, query, and leading
+    'www.', lowercase. 'https://www.YouTube.com/feed?x=1' -> 'youtube.com'."""
+    s = (raw or "").strip().lower()
+    for scheme in ("https://", "http://"):
+        if s.startswith(scheme):
+            s = s[len(scheme):]
+    s = s.split("/")[0].split("?")[0]
+    if s.startswith("www."):
+        s = s[4:]
+    return s.strip()

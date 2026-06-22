@@ -10,13 +10,15 @@ The Day is anchored to Anki's cutoff hour, so "today" matches Anki (CONTEXT.md).
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
 
 from .anki import AnkiClient, AnkiUnavailable
 from .blocker import HostsBlocker
-from .config import Config
+from .config import Config, normalize_domain
 from .state import State
 
 
@@ -26,8 +28,9 @@ def day_string(cutoff_hour: int, now: datetime) -> str:
 
 
 class Daemon:
-    def __init__(self, config: Config, anki=None, blocker=None):
+    def __init__(self, config: Config, anki=None, blocker=None, config_path: str | None = None):
         self.config = config
+        self._config_path = config_path  # set for the running daemon so edits persist
         self.anki = anki or AnkiClient(config.anki_connect_url)
         self.blocker = blocker or HostsBlocker(config.hosts_path, config.flush_dns)
 
@@ -55,13 +58,19 @@ class Daemon:
         reason = "already free today" if freed else ""
 
         if not freed:
-            # 1. Studying always wins.
+            # 1. Studying always wins - by hitting the quota, or by clearing everything
+            #    Anki has left to study (the satisfaction floor, ADR-0006). Both set
+            #    satisfied_day, so editing stays gated on genuine done, never emergency.
             try:
                 reviews = self.anki.reviews_today()
                 if reviews >= cfg.daily_quota:
                     state.satisfied_day = today
                     freed = True
                     reason = f"quota met ({reviews}/{cfg.daily_quota})"
+                elif self.anki.nothing_left_today():
+                    state.satisfied_day = today
+                    freed = True
+                    reason = f"nothing left to study ({reviews}/{cfg.daily_quota})"
                 else:
                     reason = f"quota not met ({reviews}/{cfg.daily_quota})"
             except AnkiUnavailable as e:
@@ -85,7 +94,11 @@ class Daemon:
             state.emergency_release_at = None
             state.emergency_requested_at = None
 
-        changed = self.blocker.clear() if freed else self.blocker.apply(cfg.blocklist)
+        # Apply pending Blocklist edits before enforcing: add always; remove only if
+        # the quota was met today (ADR-0005). Root is the gate, not the menu bar.
+        self._process_requests(quota_met=state.satisfied_day == today)
+
+        changed = self.blocker.clear() if freed else self.blocker.apply(self.config.blocklist)
         state.save(cfg.state_path)
 
         return {
@@ -97,6 +110,63 @@ class Daemon:
             "changed": changed,
             "emergency_release_at": state.emergency_release_at,
         }
+
+    # --- blocklist edit requests (ADR-0005) ------------------------------
+    def _process_requests(self, quota_met: bool) -> None:
+        """Drain the request inbox. Adding to the Blocklist always applies; removing
+        from it and changing the quota apply only when the quota was met today. The
+        daemon (root) is the enforcement point, so a weakening request that arrives
+        while blocked is simply discarded, never queued."""
+        inbox = self.config.requests_path
+        try:
+            names = sorted(os.listdir(inbox))
+        except OSError:
+            return  # no inbox -> nothing to do
+        changed = False
+        for name in names:
+            if not name.endswith(".json"):
+                continue  # ignore in-progress ".json.tmp" writes
+            path = os.path.join(inbox, name)
+            try:
+                with open(path) as f:
+                    req = json.load(f)
+                action = req["action"]
+            except (OSError, ValueError, KeyError, TypeError):
+                self._discard(path)
+                continue
+            if action == "add":
+                domain = normalize_domain(req.get("domain", ""))
+                if domain and domain not in self.config.blocklist:
+                    self.config.blocklist.append(domain)
+                    changed = True
+            elif action == "remove":
+                domain = normalize_domain(req.get("domain", ""))
+                if quota_met and domain in self.config.blocklist:
+                    self.config.blocklist.remove(domain)
+                    changed = True
+            elif action == "set_quota" and quota_met:
+                n = self._valid_quota(req.get("value"))
+                if n is not None and n != self.config.daily_quota:
+                    self.config.daily_quota = n
+                    changed = True
+            self._discard(path)
+        if changed and self._config_path:
+            self.config.save(self._config_path)
+
+    @staticmethod
+    def _valid_quota(value) -> int | None:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        return n if 1 <= n <= 999 else None
+
+    @staticmethod
+    def _discard(path: str) -> None:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     # --- emergency unlock control ----------------------------------------
     def request_emergency(self, now: datetime | None = None) -> dict:
