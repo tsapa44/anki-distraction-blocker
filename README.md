@@ -1,120 +1,89 @@
-# Anki Daily Blocker
+# Anki Distraction Blocker
 
-A macOS tool that withholds your chosen distractions until you've done your daily
-Anki Reviews. A SelfControl-style block, but the timer is replaced by a condition:
-**do your 20 Reviews and you're free.**
+Blocks distracting websites on macOS until you've done your daily Anki reviews.
 
-The design and the reasoning behind it live in [`CONTEXT.md`](./CONTEXT.md) (the
-glossary) and [`docs/adr/`](./docs/adr) (the decisions). Read those first - they
-explain *why* it works the way it does.
+Wake up and the sites you'd otherwise doomscroll are blocked. Open Anki, do your
+cards, and they unblock the moment you hit your daily goal. A small lock in your
+menu bar shows how close you are (`🔒 12/20`) and flips to `✅` once you're free for
+the day.
 
-## How it works
+It's a "do your reviews first" enforcer: the only real way back to your distractions
+is to study - with a slow escape hatch for genuine emergencies.
 
-A root `launchd` daemon wakes every ~30s and:
+## Features
 
-1. Asks Anki, via the **AnkiConnect** add-on, how many Reviews you've logged today.
-2. If you've hit the **Daily quota** (default 20, configurable) - or Anki has nothing
-   left to study - it lifts the **Block**.
-3. Otherwise it writes your **Blocklist** into `/etc/hosts` (pointed at `0.0.0.0`)
-   and re-asserts it every tick, so editing the file back doesn't help.
-
-If it can't reach Anki it **stays blocked** (fail closed). The one way out without
-studying is a friction-gated **Emergency unlock**: a ~15-minute delayed release for
-genuine lockouts. See [ADR-0003](./docs/adr/0003-friction-gated-emergency-unlock.md).
+- **Daily review goal.** Pick how many reviews you owe each day (default 20). Hit it and your sites unblock.
+- **Your blocklist.** Block the exact sites that eat your time, and edit the list right from the menu bar.
+- **Menu-bar progress.** `🔒 12/20` while you're short, `✅` once you're done, `⏳ 8m` while an emergency unlock counts down.
+- **Can't lock yourself out.** If Anki has nothing left for you to study, you're done for the day even under your goal - so an impossible goal can never trap you.
+- **Emergency unlock.** A deliberately slow (~15 min) release for real emergencies. Each use is logged so you can see how often you bail.
+- **Survives restarts.** It runs as a background service - quitting apps or rebooting won't lift the block.
+- **Edits are earned.** You can lower your goal or remove a site only after you've finished the day's reviews. Adding sites is always allowed.
 
 ## Requirements
 
-- macOS, desktop Anki, and the **AnkiConnect** add-on (Anki → Tools → Add-ons →
-  Get Add-ons → code `2055492159`).
-- Python 3 (stdlib only - no pip packages).
+- macOS
+- [Anki](https://apps.ankiweb.net/) with the **AnkiConnect** add-on
+- A few Terminal commands, once (there's no double-click installer yet)
 
-## Try it safely first (no root, no real /etc/hosts)
+## Install
 
-Point it at a sandbox so nothing on your system changes:
+**1. Install the AnkiConnect add-on.** In Anki: *Tools → Add-ons → Get Add-ons…*,
+paste code **`2055492159`**, then restart Anki. Keep Anki running.
+
+**2. Get the code:**
+```bash
+git clone https://github.com/tsapa44/anki-distraction-blocker.git
+cd anki-distraction-blocker
+```
+
+**3. Install the blocker** (asks for your password, since it runs as a background service):
+```bash
+sudo scripts/install.sh
+```
+
+**4. Add the menu-bar app** (no password needed):
+```bash
+scripts/install-menubar.sh
+```
+Look for the lock in your menu bar.
+
+**5. Turn off your browser's Secure DNS - don't skip this.** The block works by
+editing `/etc/hosts`, which Chrome's and Firefox's "Secure DNS" quietly routes
+around. If you skip this, blocked sites will still load:
+- **Safari** - nothing to do, it already respects the block.
+- **Chrome** - Settings → Privacy and security → Security → turn off **Use secure DNS**.
+- **Firefox** - Settings → Privacy & Security → DNS over HTTPS → **Off**.
+
+That's it. Set your goal and blocklist from the menu bar (below).
+
+## Using it
+
+Click the lock in your menu bar:
+
+- **Add site…** - block another site (any time).
+- **A site in the list** - stop blocking it (only after today's reviews are done).
+- **Change daily quota…** - set your daily goal, 1-999 (also only once you're done; it takes effect tomorrow).
+- **Emergency unlock** - lifts the block after ~15 minutes, for real emergencies.
+
+Change a setting and the menu updates instantly; the actual block follows within a
+few seconds.
+
+## Heads-up
+
+- **macOS only.**
+- **It's a speed bump, not a vault.** It's built to beat a lazy moment, not a
+  determined you - you have admin rights and could tear it out. The whole idea is
+  that doing your reviews is easier than fighting it.
+- **Secure DNS bypasses it** (see step 5). A VPN or an app using hardcoded IPs can too.
+- **Your backlog can still grow.** It makes you show up daily; it won't force you to
+  clear a giant pile in one sitting.
+
+## Uninstall
 
 ```bash
-mkdir -p /tmp/ankiblock-sandbox
-cat > /tmp/ankiblock-sandbox/config.json <<'JSON'
-{ "hosts_path": "/tmp/ankiblock-sandbox/hosts",
-  "state_path": "/tmp/ankiblock-sandbox/state.json",
-  "flush_dns": false,
-  "daily_quota": 20,
-  "blocklist": ["youtube.com", "reddit.com"] }
-JSON
-
-ANKIBLOCK_CONFIG=/tmp/ankiblock-sandbox/config.json python3 -m ankiblock status
-ANKIBLOCK_CONFIG=/tmp/ankiblock-sandbox/config.json python3 -m ankiblock tick
-cat /tmp/ankiblock-sandbox/hosts   # see the Block region it would write
-```
-
-With Anki closed you'll see it fail closed and "block" the sandbox hosts file. Open
-Anki (with AnkiConnect) and do 20 Reviews, run `tick` again, and the region clears.
-
-## Install for real
-
-This is the privileged step. It starts a daemon that blocks distractions until you
-study, and survives reboots. Make sure you've read the ADRs.
-
-```bash
-sudo scripts/install.sh        # installs + starts the daemon
-sudo scripts/uninstall.sh      # stops it and lifts any active Block
-```
-
-Edit your real Blocklist and quota in `/usr/local/etc/ankiblock/config.json`
-(root-owned on purpose, so you can't quietly weaken it mid-block).
-
-## Commands
-
-```
-python3 -m ankiblock status         # today's Reviews, Block state, unlock count
-python3 -m ankiblock tick           # evaluate once and apply (the daemon loops this)
-python3 -m ankiblock unlock         # start the ~15-min Emergency unlock
-python3 -m ankiblock cancel-unlock  # changed your mind? cancel it
-```
-
-(After a real install, prefix with `PYTHONPATH=/usr/local/lib/ankiblock
-ANKIBLOCK_CONFIG=/usr/local/etc/ankiblock/config.json`, and use `sudo` for
-`unlock`/`tick` since state is root-owned.)
-
-## Menu-bar indicator (optional)
-
-A small menu-bar app shows your progress at a glance (`🔒 12/20` when blocked, `✅`
-when free, `⏳ 8m` while an Emergency unlock counts down) and offers the unlock from a
-dropdown. It is a separate user-space app - only it needs `rumps`; the daemon stays
-stdlib-only.
-
-From the **Blocklist ▸** submenu you can **add** a site at any time, but **removing**
-one is greyed out until you've met today's quota ([ADR-0005](./docs/adr/0005-blocklist-editing-from-menu-bar.md)).
-The menu bar only drops a request; the root daemon validates and applies it, so the
-gate is enforced where it can't be clicked away.
-
-**Change daily quota…** works the same way (1-999, gated until you're done, applies
-the next Day). And because the Block also lifts once Anki has nothing left to study,
-a quota you can't reach never locks you out
-([ADR-0006](./docs/adr/0006-configurable-quota-and-satisfaction-floor.md)).
-
-```bash
-scripts/install-menubar.sh     # no sudo: venv + rumps + a login LaunchAgent
-
-# or run it once in the foreground, pointed at your sandbox. Homebrew's Python is
-# externally managed (PEP 668), so rumps goes in a venv:
-python3 -m venv /tmp/ankiblock-venv && /tmp/ankiblock-venv/bin/pip install rumps
-ANKIBLOCK_CONFIG=/tmp/ankiblock-sandbox/config.json \
-  PYTHONPATH="$PWD" /tmp/ankiblock-venv/bin/python -m ankiblock.menubar
-```
-
-## Honest limits
-
-- **Not unbypassable.** With your own admin/sudo you can always defeat it (recovery
-  mode, `sudo` editing root files). That's deliberate - see
-  [ADR-0002](./docs/adr/0002-harden-but-not-selfcontrol-grade.md). The goal is to
-  beat a *lazy moment*, not a determined you.
-- **Hostname-level only.** DNS-over-HTTPS, a VPN, or hardcoded IPs can slip the
-  `/etc/hosts` block ([ADR-0004](./docs/adr/0004-hosts-file-enforcement.md)).
-- **The backlog can grow.** The quota enforces showing up, not draining the pile.
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests -v
+sudo scripts/uninstall.sh
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.ankiblock.menubar.plist 2>/dev/null
+rm -f ~/Library/LaunchAgents/com.ankiblock.menubar.plist
+rm -rf ~/.ankiblock
 ```
