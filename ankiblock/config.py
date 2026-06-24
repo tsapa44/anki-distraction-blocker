@@ -47,7 +47,7 @@ class Config:
     flush_dns: bool = True
 
     # Behaviour
-    poll_interval_seconds: int = 30
+    poll_interval_seconds: int = 5  # also drives menu-bar refresh + edit-apply latency
     emergency_delay_seconds: int = 900  # 15 min friction on the Emergency unlock
 
     # State
