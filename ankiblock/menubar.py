@@ -105,6 +105,13 @@ def main() -> None:
             self.timer.start()
             self._tick(None)
 
+        @staticmethod
+        def _to_front():
+            # A menu-bar (accessory) app doesn't auto-focus its dialogs, so an alert or
+            # input box opens behind the active app. Activate first so it comes forward.
+            from AppKit import NSApplication
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+
         def _tick(self, _):
             try:
                 live = Config.load(config_path)  # re-read so shown settings are current
@@ -152,6 +159,7 @@ def main() -> None:
 
         def _make_add(self, inbox):
             def callback(_):
+                self._to_front()
                 win = rumps.Window(
                     message="Site to block (e.g. youtube.com)", title="Add to blocklist",
                     ok="Add", cancel="Cancel", default_text="", dimensions=(220, 24),
@@ -164,6 +172,7 @@ def main() -> None:
 
         def _make_remove(self, inbox, domain):
             def callback(_):
+                self._to_front()
                 if rumps.alert(
                     title="Stop blocking this site?",
                     message=f"{domain} won't be blocked anymore. Add it again to re-block it.",
@@ -175,6 +184,7 @@ def main() -> None:
 
         def _make_set_quota(self, inbox, current):
             def callback(_):
+                self._to_front()
                 win = rumps.Window(
                     message="Reviews required per day (1-999). Applies tomorrow.",
                     title="Daily quota", ok="Set", cancel="Cancel",
@@ -188,10 +198,12 @@ def main() -> None:
                     write_request(inbox, "set_quota", value=int(text))
                     self._tick(None)
                 else:
+                    self._to_front()
                     rumps.alert("AnkiBlock", "Enter a whole number from 1 to 999.")
             return callback
 
         def _unlock(self, _):
+            self._to_front()
             try:
                 res = daemon.request_emergency()
             except (PermissionError, OSError):
